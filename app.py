@@ -1,252 +1,202 @@
-# Gapminder Explorer - Interactive Filtering App
+# Earthquake Explorer - Interactive Filtering App
 # Built with Streamlit, pandas, and Plotly Express
+# Data: USGS Earthquake Catalog, all magnitude 4.5+ earthquakes in 2024
+
+import datetime
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-# ------------------------------------------------------------
-# 1. Page setup
-# ------------------------------------------------------------
-st.set_page_config(page_title="Gapminder Explorer", layout="wide")
+st.set_page_config(page_title="Earthquake Explorer", layout="wide")
 
-st.title("Gapminder Explorer: Life Expectancy & Wealth (1952-2007)")
+st.title("Earthquake Explorer: Magnitude 4.5+ Earthquakes in 2024")
 
-st.markdown(
-    """
-**How to use this app**
-
-1. Use the **filters in the left sidebar** to choose a date range, continents,
-   a GDP per capita range, and whether to include only large countries.
-2. Every chart and number on this page updates automatically when you change a filter.
-3. Hover over a chart to see exact values. Drag to zoom in, and double-click to zoom back out.
-"""
-)
+st.write("**How to use this app:**")
+st.write("1. Use the filters in the left sidebar to choose which earthquakes you want to see.")
+st.write("2. Every chart and number on this page updates when you change a filter.")
+st.write("3. Hover over a chart to see exact values. Drag to zoom in, double-click to zoom out.")
+st.write("4. Click a bar in chart 3 to see the earthquakes for just that region.")
 
 
-# ------------------------------------------------------------
-# 2. Load the data
-# ------------------------------------------------------------
+# ---------- Load the data ----------
 # @st.cache_data means the CSV is only read once, not every time a filter changes
 @st.cache_data
 def load_data():
-    df = pd.read_csv("data/gapminder.csv")
-
-    # The dataset only has a "year" number, so we turn it into a real date
-    # (January 1st of that year) so we can use a date range selector
-    df["date"] = pd.to_datetime(df["year"].astype(str) + "-01-01")
-
-    # Rename columns so they look nicer in charts
-    df = df.rename(
-        columns={
-            "country": "Country",
-            "continent": "Continent",
-            "lifeExp": "Life Expectancy",
-            "pop": "Population",
-            "gdpPercap": "GDP per Capita",
-        }
-    )
+    df = pd.read_csv("data/earthquakes_2024.csv")
+    # Turn the date text into real dates so we can filter by date
+    df["time"] = pd.to_datetime(df["time"])
+    df["week"] = pd.to_datetime(df["week"])
+    df["date"] = df["time"].dt.date
     return df
 
 
 df = load_data()
 
+# Use the same color for each depth type in every chart
+depth_colors = {"Shallow": "#E45756", "Intermediate": "#F58518", "Deep": "#4C78A8"}
 
-# ------------------------------------------------------------
-# 3. Sidebar filters
-# ------------------------------------------------------------
-st.sidebar.header("Filters")
 
-# Filter 1: Date range selector
-min_date = df["date"].min().date()
-max_date = df["date"].max().date()
+# ---------- Sidebar filters ----------
+with st.sidebar:
+    st.header("Filters")
 
-date_range = st.sidebar.date_input(
-    "Date range",
-    value=(min_date, max_date),
-    min_value=min_date,
-    max_value=max_date,
-    help="Data is recorded every 5 years (1952, 1957, ... 2007).",
-)
+    # Filter 1: Date range
+    date_range = st.date_input(
+        "Date range",
+        value=(datetime.date(2024, 1, 1), datetime.date(2024, 12, 31)),
+        min_value=datetime.date(2024, 1, 1),
+        max_value=datetime.date(2024, 12, 31),
+    )
 
-# While the user is picking dates, Streamlit may only return one date.
-# In that case we just use the full range until they pick the second date.
+    # Filter 2: Regions (multi-select)
+    selected_regions = st.multiselect("Regions", sorted(df["region"].unique()))
+    st.caption("Leave empty to show all regions. Type to search.")
+
+    # Filter 3: Magnitude (slider)
+    mag_range = st.slider("Magnitude", 4.5, 7.5, (4.5, 7.5), step=0.1)
+
+    # Filter 4: Shallow earthquakes only (checkbox)
+    shallow_only = st.checkbox("Only show shallow earthquakes (less than 70 km deep)")
+    st.caption("Shallow earthquakes usually cause the most shaking at the surface.")
+
+
+# ---------- Apply the filters ----------
+# While the user is still picking dates, date_input only gives back one date.
+# In that case we use the full year until they pick the second date.
 if len(date_range) == 2:
-    start_date, end_date = date_range
+    start_date = date_range[0]
+    end_date = date_range[1]
 else:
-    start_date, end_date = min_date, max_date
+    start_date = datetime.date(2024, 1, 1)
+    end_date = datetime.date(2024, 12, 31)
 
-# Filter 2: Multi-select for continents
-all_continents = sorted(df["Continent"].unique())
-
-selected_continents = st.sidebar.multiselect(
-    "Continents",
-    options=all_continents,
-    default=all_continents,
-)
-
-# Filter 3: Numeric slider for GDP per capita
-min_gdp = int(df["GDP per Capita"].min())
-max_gdp = int(df["GDP per Capita"].max()) + 1
-
-gdp_range = st.sidebar.slider(
-    "GDP per capita (US$)",
-    min_value=min_gdp,
-    max_value=max_gdp,
-    value=(min_gdp, max_gdp),
-    step=500,
-)
-
-# Filter 4: Checkbox for a yes/no choice
-large_only = st.sidebar.checkbox(
-    "Only show large countries (population over 10 million)",
-    value=False,
-)
-
-
-# ------------------------------------------------------------
-# 4. Apply the filters with pandas
-# ------------------------------------------------------------
+# Filter by date range AND magnitude range
 filtered = df[
-    (df["date"] >= pd.to_datetime(start_date))
-    & (df["date"] <= pd.to_datetime(end_date))
-    & (df["Continent"].isin(selected_continents))
-    & (df["GDP per Capita"] >= gdp_range[0])
-    & (df["GDP per Capita"] <= gdp_range[1])
+    (df["date"] >= start_date)
+    & (df["date"] <= end_date)
+    & (df["magnitude"] >= mag_range[0])
+    & (df["magnitude"] <= mag_range[1])
 ]
 
-if large_only:
-    filtered = filtered[filtered["Population"] > 10_000_000]
+# Only filter by region if something is selected
+if selected_regions:
+    filtered = filtered[filtered["region"].isin(selected_regions)]
 
-# Edge case: stop here if no rows match the filters
-if filtered.empty:
-    st.warning(
-        "No data matches your filters. Try widening the date range, "
-        "selecting more continents, or widening the GDP range."
+# Only filter by depth if the box is checked
+if shallow_only:
+    filtered = filtered[filtered["depth_type"] == "Shallow"]
+
+
+# ---------- Show results ----------
+if len(filtered) == 0:
+    st.warning("No data matches your current filters. Try adjusting your selections.")
+else:
+    # ---------- Summary statistics ----------
+    st.subheader("Summary of Filtered Data")
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Earthquakes", len(filtered))
+    with col2:
+        st.metric("Strongest", f"M {filtered['magnitude'].max():.1f}")
+    with col3:
+        st.metric("Average Magnitude", f"M {filtered['magnitude'].mean():.2f}")
+    with col4:
+        st.metric("Average Depth", f"{filtered['depth'].mean():.0f} km")
+
+    # ---------- Chart 1: Line chart (time series) ----------
+    st.subheader("1. Earthquakes Over Time")
+
+    # Count how many earthquakes of each depth type happened each week
+    weekly = filtered.groupby(["week", "depth_type"]).size().reset_index(name="count")
+
+    fig1 = px.line(
+        weekly,
+        x="week",
+        y="count",
+        color="depth_type",
+        color_discrete_map=depth_colors,
+        markers=True,
+        title="Number of Earthquakes per Week by Depth",
+        labels={"week": "Week", "count": "Number of earthquakes", "depth_type": "Depth"},
     )
-    st.stop()
+    st.plotly_chart(fig1)
 
+    # ---------- Chart 2: Map ----------
+    st.subheader("2. Where Did They Happen?")
 
-# ------------------------------------------------------------
-# 5. Summary statistics (these update with the filters)
-# ------------------------------------------------------------
-st.subheader("Summary of Filtered Data")
+    fig2 = px.scatter_geo(
+        filtered,
+        lat="latitude",
+        lon="longitude",
+        size="magnitude",
+        color="depth_type",
+        color_discrete_map=depth_colors,
+        hover_name="place",
+        hover_data=["magnitude", "depth", "date"],
+        projection="natural earth",
+        title="Earthquake Locations (bigger dot = stronger earthquake)",
+        labels={"depth_type": "Depth", "depth": "Depth (km)", "magnitude": "Magnitude", "date": "Date"},
+    )
+    st.plotly_chart(fig2)
+    st.caption("Most earthquakes line up along the edges of tectonic plates, like the Pacific 'Ring of Fire'.")
 
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Rows", f"{len(filtered):,}")
-col2.metric("Countries", filtered["Country"].nunique())
-col3.metric("Avg. Life Expectancy", f"{filtered['Life Expectancy'].mean():.1f} yrs")
-col4.metric("Median GDP per Capita", f"${filtered['GDP per Capita'].median():,.0f}")
+    # ---------- Chart 3: Bar chart with error bars (uncertainty) ----------
+    st.subheader("3. Which Regions Have the Strongest Earthquakes?")
 
-with st.expander("Show detailed statistics table"):
-    stats = filtered[["Life Expectancy", "Population", "GDP per Capita"]].describe()
-    st.dataframe(stats.round(1))
+    # For each region, find the average magnitude, the standard deviation, and the count
+    stats = filtered.groupby("region")["magnitude"].agg(["mean", "std", "count"]).reset_index()
 
-# Use the same colors for each continent in every chart
-continent_colors = {
-    "Africa": "#E45756",
-    "Americas": "#4C78A8",
-    "Asia": "#F58518",
-    "Europe": "#54A24B",
-    "Oceania": "#B279A2",
-}
+    # A region with only 1 earthquake has no standard deviation, so use 0
+    stats["std"] = stats["std"].fillna(0)
 
+    # Only show the 10 regions with the most earthquakes
+    stats = stats.sort_values("count", ascending=False).head(10)
 
-# ------------------------------------------------------------
-# 6. Chart 1: Time series (Week 7)
-# ------------------------------------------------------------
-st.subheader("1. Life Expectancy Over Time")
+    fig3 = px.bar(
+        stats,
+        x="region",
+        y="mean",
+        error_y="std",
+        color="count",
+        color_continuous_scale="Blues",
+        title="Average Magnitude in the 10 Most Active Regions (error bars = standard deviation)",
+        labels={"region": "Region", "mean": "Average Magnitude", "std": "Standard deviation", "count": "Number of earthquakes"},
+    )
+    fig3.update_yaxes(range=[4, 6])
+    st.caption("Longer error bars mean the earthquakes in that region vary more in strength. "
+               "Darker bars mean more earthquakes. Click a bar to see that region below.")
 
-# Average life expectancy for each continent in each year
-trend = (
-    filtered.groupby(["date", "Continent"])["Life Expectancy"]
-    .mean()
-    .reset_index()
-)
+    # on_select="rerun" lets the user click a bar to filter the next chart
+    clicked = st.plotly_chart(fig3, on_select="rerun")
 
-fig_line = px.line(
-    trend,
-    x="date",
-    y="Life Expectancy",
-    color="Continent",
-    color_discrete_map=continent_colors,
-    markers=True,
-    title="Average Life Expectancy by Continent Over Time",
-    labels={"date": "Year", "Life Expectancy": "Average Life Expectancy (years)"},
-)
-st.plotly_chart(fig_line, width="stretch")
+    # ---------- Chart 4: Click a bar to see one region (linked filtering) ----------
+    if clicked and clicked["selection"]["point_indices"]:
+        selected_idx = clicked["selection"]["point_indices"][0]
+        selected_region = stats.iloc[selected_idx]["region"]
 
+        # Filter the data to only the region that was clicked
+        region_data = filtered[filtered["region"] == selected_region]
 
-# ------------------------------------------------------------
-# 7. Chart 2: Map (Week 8)
-# ------------------------------------------------------------
-st.subheader("2. World Map")
+        st.subheader(f"4. Earthquakes in {selected_region}")
 
-# Let the user pick which year to show on the map (only years in the filtered data)
-map_years = sorted(filtered["year"].unique())
-map_year = st.select_slider("Year shown on map", options=map_years, value=map_years[-1])
+        fig4 = px.scatter(
+            region_data,
+            x="time",
+            y="magnitude",
+            color="depth_type",
+            color_discrete_map=depth_colors,
+            hover_name="place",
+            title=f"Every Earthquake in {selected_region} (each dot is one earthquake)",
+            labels={"time": "Date", "magnitude": "Magnitude", "depth_type": "Depth"},
+        )
+        st.plotly_chart(fig4)
+    else:
+        st.info("Click a bar in chart 3 to see every earthquake in that region.")
 
-map_data = filtered[filtered["year"] == map_year]
+    # ---------- Data table ----------
+    st.subheader("Filtered Data")
+    st.dataframe(filtered.drop(columns=["date", "week"]))
 
-fig_map = px.choropleth(
-    map_data,
-    locations="iso_alpha",
-    color="Life Expectancy",
-    hover_name="Country",
-    hover_data={"iso_alpha": False, "GDP per Capita": ":,.0f", "Population": ":,"},
-    color_continuous_scale="Viridis",
-    range_color=(df["Life Expectancy"].min(), df["Life Expectancy"].max()),
-    title=f"Life Expectancy by Country in {map_year}",
-    labels={"Life Expectancy": "Life Expectancy (years)"},
-)
-st.plotly_chart(fig_map, width="stretch")
-st.caption("Grey countries are not in the filtered data.")
-
-
-# ------------------------------------------------------------
-# 8. Chart 3: Uncertainty with error bars (Week 9)
-# ------------------------------------------------------------
-st.subheader("3. How Certain Are the Averages?")
-
-# For each continent, calculate the mean, standard deviation, and count
-ci_data = (
-    map_data.groupby("Continent")["Life Expectancy"]
-    .agg(["mean", "std", "count"])
-    .reset_index()
-)
-
-# 95% confidence interval = 1.96 * (standard deviation / square root of count)
-ci_data["std"] = ci_data["std"].fillna(0)  # a group with 1 country has no std
-ci_data["ci_95"] = 1.96 * ci_data["std"] / (ci_data["count"] ** 0.5)
-
-fig_ci = px.bar(
-    ci_data,
-    x="Continent",
-    y="mean",
-    error_y="ci_95",
-    color="Continent",
-    color_discrete_map=continent_colors,
-    hover_data={"count": True, "ci_95": ":.2f", "mean": ":.1f"},
-    title=f"Average Life Expectancy by Continent in {map_year} (with 95% Confidence Intervals)",
-    labels={
-        "mean": "Average Life Expectancy (years)",
-        "count": "Number of countries",
-        "ci_95": "95% CI (+/- years)",
-    },
-)
-fig_ci.update_layout(showlegend=False)
-st.plotly_chart(fig_ci, width="stretch")
-
-st.caption(
-    "The black lines are 95% confidence intervals. Longer lines mean we are less sure "
-    "about the average, usually because there are fewer countries or they differ a lot."
-)
-
-
-# ------------------------------------------------------------
-# 9. Show the filtered data
-# ------------------------------------------------------------
-with st.expander("Show filtered data table"):
-    st.dataframe(filtered.drop(columns=["date", "iso_num"]))
-
-st.caption("Data source: Gapminder Foundation (via the Plotly Express sample datasets).")
+st.caption("Data source: U.S. Geological Survey (USGS) Earthquake Catalog, https://earthquake.usgs.gov/earthquakes/search/")
